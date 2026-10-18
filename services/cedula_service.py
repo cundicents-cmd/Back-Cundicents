@@ -1,6 +1,6 @@
 from google.genai import types
 from core.gemini import client
-from core.config import settings
+from core.config_gemini import settings
 from models.cedula import DatosCedula
 
 PROMPT = """
