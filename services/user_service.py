@@ -3,6 +3,9 @@ from database import engine
 from models.auth_user import AuthUser
 from schemas.user_schema import UserRegisterRequest, UserRegisterResponse, UserDetailResponse, UserUpdateDataRequest
 from services.password_service import hash_password
+from services.crypto_service import desencriptar_payload
+from services.password_service import verify_password  
+
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -160,6 +163,120 @@ def actualizar_datos_usuario(db: Session, user_id: int, data: UserUpdateDataRequ
         if raw_conn:
             raw_conn.rollback()
         raise RuntimeError(f"Error al ejecutar actualizar_Usuario: {e}")
+
+    finally:
+        if cursor:
+            cursor.close()
+        if raw_conn:
+            raw_conn.close()
+
+def verificar_usuario(payload_b64: str) -> dict:
+    """
+    Desencripta el payload, busca el hash en la BD usando el SP 
+    y verifica la contraseña con check_password de Django.
+    """
+    # 1. Desencriptar
+    try:
+        datos = desencriptar_payload(payload_b64)
+        correo = datos.get("correo")
+        password_plana = datos.get("password")
+    except Exception as e:
+        raise ValueError(f"Payload inválido: {str(e)}")
+
+    if not correo or not password_plana:
+        raise ValueError("El payload debe contener 'correo' y 'password'.")
+
+    # 2. Llamar al SP para obtener el hash guardado
+    raw_conn = engine.raw_connection()
+    cursor = None
+    try:
+        cursor = raw_conn.cursor()
+        
+        sql = "CALL verificar_Usuario(%s)"
+        cursor.execute(sql, (correo,))
+
+        # Capturar el resultado del SP
+        usuario_id = None
+        db_password_hash = None
+        
+        while True:
+            if cursor.description:
+                resultado = cursor.fetchone()
+                if resultado:
+                    usuario_id = resultado[0]
+                    db_password_hash = resultado[1]
+            
+            if not cursor.nextset():
+                break
+
+        raw_conn.commit()
+
+        # Si no se encontró el correo, el SP no devuelve filas
+        if not db_password_hash:
+            raise ValueError("Correo o contraseña incorrectos.")
+
+        if verify_password(password_plana, db_password_hash):
+            return {
+                "mensaje": "Login exitoso", 
+                "id_usuario": usuario_id,
+                "correo": correo,                 
+                "hash_password": db_password_hash 
+            }
+        else:
+            raise ValueError("Correo o contraseña incorrectos.")
+
+    except Exception as e:
+        if raw_conn:
+            raw_conn.rollback()
+        if isinstance(e, ValueError):
+            raise e
+        raise RuntimeError(f"Error al ejecutar verificar_Usuario: {e}")
+
+    finally:
+        if cursor:
+            cursor.close()
+        if raw_conn:
+            raw_conn.close()
+
+def verificar_credenciales_sp(username: str, password: str) -> bool:
+    """
+    Llama al SP verificar_Usuario_Credenciales que devuelve un TINYINT en p_existe.
+    """
+    # NOTA: Si no quieres usar make_password, simplemente pasa 'password' directo.
+    # hashed_password = hash_password(password) 
+    hashed_password = password # Asumiendo que el SP espera el hash o texto plano exacto
+
+    raw_conn = engine.raw_connection()
+    cursor = None
+    try:
+        cursor = raw_conn.cursor()
+        
+        # Los 3 parámetros: p_username, p_password y el placeholder para p_existe (OUT)
+        args = (username, hashed_password, 0)
+        
+        # Llamamos al SP
+        cursor.callproc("verificar_Usuario_Credenciales", args)
+        
+        # Consumir result sets (PyMySQL)
+        while cursor.nextset():
+            pass
+            
+        # Recuperar el OUT (posición 2, porque es el tercer parámetro, base 0)
+        cursor.execute("SELECT @_verificar_Usuario_Credenciales_2")
+        resultado = cursor.fetchone()
+        
+        raw_conn.commit()
+        
+        if not resultado or resultado[0] is None:
+            return False
+            
+        # Retorna True si p_existe es 1, False si es 0
+        return bool(resultado[0])
+
+    except Exception as e:
+        if raw_conn:
+            raw_conn.rollback()
+        raise RuntimeError(f"Error al ejecutar verificar_Usuario_Credenciales: {e}")
 
     finally:
         if cursor:

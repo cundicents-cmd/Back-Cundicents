@@ -10,6 +10,9 @@ __pycache__/
 *$py.class
 *.so
 
+#Clave Privada
+clave_privada.pem
+
 # Variables de entorno
 .env
 .env.*
