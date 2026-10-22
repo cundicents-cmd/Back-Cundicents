@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from core.config import settings
 from fastapi.openapi.utils import get_openapi
 from core.config_django import setup_django 
 from routers.cedula import router as cedula_router
@@ -10,11 +11,18 @@ from routers.historico_router import router as historico_router
 setup_django()
 
 
-app = FastAPI(
+app = FastAPI( 
     title="API de Cundicents",
     description="API para gestionar la plataforma Cundicents",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs" if settings.app_env != "production" else None,
+    redoc_url="/redoc" if settings.app_env != "production" else None,
+    openapi_url="/openapi.json" if settings.app_env != "production" else None,
 )
+
+# app.add_middleware(
+#     allowed_hosts=["*"],
+# )
 
 app.include_router(cedula_router)
 app.include_router(user_router)
@@ -27,6 +35,26 @@ app.include_router(historico_router)
 def inicio():
     return {"mensaje": "FastAPI Funcionando"}
 
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "message": "La API está funcionando correctamente"
+    }
+
+@app.get("/v1/models")
+def listar_modelos():
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "cundicents",
+                "object": "model",
+                "created": 0,
+                "owned_by": "cundicents"
+            }
+        ]
+    }
 
 def custom_openapi():
     # Si el esquema ya fue generado, lo devolvemos de la caché
